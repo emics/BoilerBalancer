@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////
 //                                                //
-//              Balance Boiler 1.00               //
+//              Balance Boiler 1.02               //
 //                                                //
 ////////////////////////////////////////////////////
 
@@ -15,8 +15,8 @@
 
 // DEFINITIONS
 #define _DEBUG_               true
-#define VERSION               1.00
-#define NUMBOILER             2 // number of boiler
+#define VERSION               1.02
+#define NUMBOILER             5 // number of boiler
 #define MODE_ALL_OFF          0 // Mode all relay OFF
 #define MODE_ALL_ON           1 // Mode all relay ON
 #define MODE_AUTO             2 // Mode Automatic
@@ -53,7 +53,7 @@ const char LetterBoiler[]    = {"ABCDEF"};
 const String ModeName[]      = {"ALL OFF","ALL ON"," AUTO"};
 const long TimerSave         = 30000; //save data 30 seconds after last push button
 const long TimerStandby      = 60000; //go in standby 1 minute after last push button
-const long TimerTemperature  = 1000; //read temperature every 1 second
+const long TimerTemperature  = 1000;  //read temperature every 1 second
 unsigned long LastReadTemperature= 0;
 boolean Saved                = false;
 unsigned long LastAction     = 0;
@@ -68,6 +68,7 @@ const long debounceDelay     = 50;
 // relay                     
 const int RelayPin[]         = {2, 3, 4, 5, 6, 7};  // relay attached to this pin 
 boolean RelayStatus[]        = {false, false, false, false, false, false};
+boolean RelaySafeMode[]      = {false, false, false, false, false, false};
                              
 // temperature               
 int OnTemp                   = DEFAULTON;
@@ -76,10 +77,10 @@ int TempValue[]              = {0,0,0,0,0,0};
 DeviceAddress TempAddress[]  = {
   { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 }, // A
   { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 }, // B
-  { 0x28, 0x1E, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 },
-  { 0x28, 0x1A, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 },
-  { 0x28, 0x10, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 },
-  { 0x28, 0x12, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 }
+  { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE }, // C
+  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D
+  { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 }, // E
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }  // F
 };
 
 // LCD
@@ -112,253 +113,344 @@ LiquidCrystal_I2C  lcd(I2C_ADDR,En_pin,Rw_pin,Rs_pin,D4_pin,D5_pin,D6_pin,D7_pin
 //
 // SETUP
 //
-void setup(void){
-  if (_DEBUG_)
-  {
-    Serial.begin(9600);
-    Serial.print("BOILER: ");
-    Serial.println(NUMBOILER);
-  }
-  initEEprom();
-  initRelay();
-  initButton();
-  initLCD();
-  initSensor();
-  delay(5000);
-  clearLCDtop();
-  checkChangeMode();
+void setup(void) {
+	if (_DEBUG_)
+	{
+		Serial.begin(9600);
+		Serial.print("BOILER: ");
+		Serial.println(NUMBOILER);
+	}
+	initEEprom();
+	initRelay();
+	initButton();
+	initLCD();
+	initSensor();
+	delay(5000);
+	clearLCDtop();
+	checkChangeMode();
 }
 
 //
 // LOOP
 //
-void loop(void){
-  currentMillis = millis();
-  checkButtons();  
-  scanSensors();
-  refreshLCD();
-  saveData();
+void loop(void) {
+	currentMillis = millis();
+	checkButtons();  
+	scanSensors();
+	refreshLCD();
+	saveData();
 }
 
-void tempControl(void){
-  if (ActiveMode == MODE_AUTO){
-    for (int i = 0; i < NUMBOILER; i++){
-        if (RelayStatus[i]){
-          // Relay already ON valve OPEN
-          if (TempValue[i] <= OffTemp){
-            // CLOSE valve - the temperature is cold
-            if (_DEBUG_) Serial.print("CLOSE valve: ");
-            if (_DEBUG_) Serial.println(LetterBoiler[i]);
-            digitalWrite(RelayPin[i], CLOSE_VALVE);
-            RelayStatus[i] = false;
-          }
-        }
-        else{
-           // Relay already OFF valve CLOSE
-          if (TempValue[i] >= OnTemp){
-             // OPEN valve - the temperature is hot
-             if (_DEBUG_) Serial.print("OPEN valve: ");
-             if (_DEBUG_) Serial.println(LetterBoiler[i]);
-             digitalWrite(RelayPin[i], OPEN_VALVE);
-             RelayStatus[i] = true;
-          }
-        }
-    }
-  }
+void tempControl(void) {
+	if (ActiveMode == MODE_AUTO) {
+		for (int i = 0; i < NUMBOILER; i++) {
+			// check if some sensor are in error
+			if (TempValue[i] == -127) {
+				// sensor in error -  OPEN VALVE
+				digitalWrite(RelayPin[i], OPEN_VALVE);
+				RelayStatus[i] = true;
+			}
+			else { 
+				if (RelayStatus[i]) {
+					// Relay already ON valve OPEN
+					if (TempValue[i] <= OffTemp) {   
+						if (!RelaySafeMode[i]) { // check if not in SafeMode
+							// CLOSE valve - the temperature is cold
+							if (_DEBUG_) Serial.print("CLOSE valve: ");
+							if (_DEBUG_) Serial.println(LetterBoiler[i]);
+							digitalWrite(RelayPin[i], CLOSE_VALVE);
+							RelayStatus[i] = false;
+						}
+					}
+				}
+				else {
+					// Relay already OFF valve CLOSE
+					if (TempValue[i] >= OnTemp) {
+						// OPEN valve - the temperature is hot
+						if (_DEBUG_) Serial.print("OPEN valve: ");
+						if (_DEBUG_) Serial.println(LetterBoiler[i]);
+						digitalWrite(RelayPin[i], OPEN_VALVE);
+						RelayStatus[i] = true;
+						if (isSafeMode()) {
+							exitSafeMode();  // exit from SafeMode
+						}
+					}
+				}
+			}
+		}
+		checkSafeMode();
+	}
 }
 
-void initAutoMode(void){
-  if (ActiveMode == MODE_AUTO){
-    int midTemp = (OnTemp + OffTemp) / 2;
+void initAutoMode(void) {
+	if (ActiveMode == MODE_AUTO) {
+	int midTemp = (OnTemp + OffTemp) / 2;
 	if (_DEBUG_) Serial.print("Mid Temp: ");
 	if (_DEBUG_) Serial.println(midTemp);
-    for (int i = 0; i < NUMBOILER; i++){
-	  if (TempValue[i] <= midTemp){
-		// CLOSE valve - the temperature is cold
-		if (_DEBUG_) Serial.print("CLOSE valve: ");
-		if (_DEBUG_) Serial.println(LetterBoiler[i]);
-		digitalWrite(RelayPin[i], CLOSE_VALVE);
-		RelayStatus[i] = false;
-	  }
-	  else{
-		// OPEN valve - the temperature is hot
-		if (_DEBUG_) Serial.print("OPEN valve: ");
-		if (_DEBUG_) Serial.println(LetterBoiler[i]);
-		digitalWrite(RelayPin[i], OPEN_VALVE);
-		RelayStatus[i] = true;
-	  }
-    }
-  }
+	for (int i = 0; i < NUMBOILER; i++) {
+		if (TempValue[i] <= midTemp) {
+			// CLOSE valve - the temperature is cold
+			if (_DEBUG_) Serial.print("CLOSE valve: ");
+			if (_DEBUG_) Serial.println(LetterBoiler[i]);
+			digitalWrite(RelayPin[i], CLOSE_VALVE);
+			RelayStatus[i] = false;
+		}
+		else {
+			// OPEN valve - the temperature is hot
+			if (_DEBUG_) Serial.print("OPEN valve: ");
+			if (_DEBUG_) Serial.println(LetterBoiler[i]);
+			digitalWrite(RelayPin[i], OPEN_VALVE);
+			RelayStatus[i] = true;
+			}
+		}
+	}
 }
 
-void switchMode(boolean reverse){
-  if (!reverse){
-    switch (ActiveMode){
-	  case MODE_ALL_OFF:
-        ActiveMode = MODE_ALL_ON;
-        break;
-      case MODE_ALL_ON:
-        ActiveMode = MODE_AUTO;
-		initAutoMode();
-        break;
-      case MODE_AUTO: 
-        ActiveMode = MODE_ALL_OFF;
-        break;
-    }
-  }
-  else{
-    switch (ActiveMode){
-	  case MODE_ALL_OFF:
-      ActiveMode = MODE_AUTO;
-	  initAutoMode();
-      break;
-      case MODE_ALL_ON:
-      ActiveMode = MODE_ALL_OFF;
-      break;
-      case MODE_AUTO: 
-      ActiveMode = MODE_ALL_ON;
-      break;
-    }
-  }
-  if (_DEBUG_) Serial.print("switchMode:");
-  if (_DEBUG_) Serial.println(ActiveMode);
-  checkChangeMode();
+void checkSafeMode(void) {
+	if (ActiveMode == MODE_AUTO) {    
+		if (isAllClose()) {
+			// if all VALVE are CLOSED 
+			// OPEN the most hot
+			int pos = foundMaxTemp();
+			digitalWrite(RelayPin[pos], OPEN_VALVE);
+			RelayStatus[pos] = true;
+			RelaySafeMode[pos] = true;
+		}
+		else {
+			if (isSafeMode()) {
+				//  already in safe mode 
+				//  check if there are other hot boiler
+				//  and OPEN it
+				int pos = foundMaxTemp();
+				digitalWrite(RelayPin[pos], OPEN_VALVE);
+				RelayStatus[pos] = true;
+				RelaySafeMode[pos] = true;
+				for (int i = 0; i < NUMBOILER; i++) {
+					if (RelaySafeMode[i]) {
+						if (i != pos) {
+							digitalWrite(RelayPin[i], CLOSE_VALVE);
+							RelayStatus[i] = false;
+							RelaySafeMode[i] = false;
+						}
+					}
+				} 
+			}
+		}
+	}
+}
+
+boolean isSafeMode(void) {
+	// check if all VALVE are false
+	boolean tmp = false;
+	for (int i = 0; i < NUMBOILER; i++) {
+		if (RelaySafeMode[i]) {
+			tmp = true;
+		}
+	}
+	return tmp;
+}
+
+void exitSafeMode(void) {
+	for (int i = 0; i < NUMBOILER; i++) {
+		if (RelaySafeMode[i]) {
+			digitalWrite(RelayPin[i], CLOSE_VALVE);
+			RelayStatus[i] = false;
+			RelaySafeMode[i] = false;
+		}
+	}
+}
+
+boolean isAllClose(void) {
+	// check if all VALVE are CLOSED
+	boolean tmp = true;
+	for (int i = 0; i < NUMBOILER; i++) {
+		if (RelayStatus[i]) {
+			tmp = false;
+		}
+	}
+	return tmp;
+}
+
+int foundMaxTemp(void) {
+	// found max sensor Temp
+	int maxTemp   = 0; // store max sensor temp
+	int maxNumber;     // store max sensor number
+	for (int i = 0; i < NUMBOILER; i++) {
+		if (TempValue[i] > maxTemp) {
+			maxNumber = i;
+			maxTemp = TempValue[i];
+		}
+	}
+	return maxNumber;
+}
+
+void switchMode(boolean reverse) {
+	if (!reverse) {
+		switch (ActiveMode) {
+			case MODE_ALL_OFF:
+				ActiveMode = MODE_ALL_ON;
+				break;
+			case MODE_ALL_ON:
+				ActiveMode = MODE_AUTO;
+				initAutoMode();
+				break;
+			case MODE_AUTO: 
+				ActiveMode = MODE_ALL_OFF;
+				break;
+		}
+	}
+	else {
+		switch (ActiveMode) {
+			case MODE_ALL_OFF:
+				ActiveMode = MODE_AUTO;
+				initAutoMode();
+				break;
+			case MODE_ALL_ON:
+				ActiveMode = MODE_ALL_OFF;
+				break;
+			case MODE_AUTO: 
+				ActiveMode = MODE_ALL_ON;
+				break;
+		}
+	}
+	if (_DEBUG_) Serial.print("switchMode:");
+	if (_DEBUG_) Serial.println(ActiveMode);
+	checkChangeMode();
 }
 
 void checkButtons(void){
-  ButtonState[BTNSEL] = digitalRead(ButtonPin[BTNSEL]);
-  ButtonState[BTNUP]  = digitalRead(ButtonPin[BTNUP]);
-  ButtonState[BTNDWN] = digitalRead(ButtonPin[BTNDWN]);
-  
-  if ((unsigned long)(currentMillis - previousMillis) > debounceDelay){
-  if (ButtonState[BTNSEL] == LOW){ 
-    LastAction = currentMillis;
-    if (!ButtonActive[BTNSEL]){
-		if (_DEBUG_) Serial.println("Button SEL Pressed");
-		ButtonActive[BTNSEL] = true;
-		if (StandBy){
-			StandBy = false;
-		}
-		else{
-		if (ActiveMode == MODE_AUTO){
-			  switch (SelectedItem){
-				case ITEM_OFF:
-				  // select ON ITEM
-				  SelectedItem = ITEM_ON;
-				  break;
-				case ITEM_ON:
-				  // select MODE ITEM
-				  SelectedItem = ITEM_MODE;
-				  break;
-				case ITEM_MODE: 
-				  // select MODE OFF
-				  SelectedItem = ITEM_OFF;
-				  break;
-			  }
-			  writeCursorLCD();
+	ButtonState[BTNSEL] = digitalRead(ButtonPin[BTNSEL]);
+	ButtonState[BTNUP]  = digitalRead(ButtonPin[BTNUP]);
+	ButtonState[BTNDWN] = digitalRead(ButtonPin[BTNDWN]);
+
+	if ((unsigned long)(currentMillis - previousMillis) > debounceDelay){
+		if (ButtonState[BTNSEL] == LOW){ 
+			LastAction = currentMillis;
+			if (!ButtonActive[BTNSEL]){
+				if (_DEBUG_) Serial.println("Button SEL Pressed");
+				ButtonActive[BTNSEL] = true;
+				if (StandBy){
+					StandBy = false;
+				}
+				else{
+					if (ActiveMode == MODE_AUTO){
+						switch (SelectedItem){
+							case ITEM_OFF:
+								// select ON ITEM
+								SelectedItem = ITEM_ON;
+								break;
+							case ITEM_ON:
+								// select MODE ITEM
+								SelectedItem = ITEM_MODE;
+								break;
+							case ITEM_MODE: 
+								// select MODE OFF
+								SelectedItem = ITEM_OFF;
+								break;
+						}
+						writeCursorLCD();
+					}
+				}
 			}
 		}
-	}
-  }
-  else{
-    if (ButtonActive[BTNSEL]){
-      if (_DEBUG_) Serial.println("Button SEL Released");
-      ButtonActive[BTNSEL] = false;
-    }
-  }
-  
-  if (ButtonState[BTNUP] == LOW){
-    LastAction = currentMillis;
-    if (!ButtonActive[BTNUP]){
-		if (_DEBUG_) Serial.println("Button UP Pressed");
-		ButtonActive[BTNUP] = true;
-		if (StandBy){
-			StandBy = false;
-		}
 		else{
-			Saved = false;
-			switch (SelectedItem){
-				case ITEM_OFF:
-				  // increase OFF Temp
-				  if (OffTemp < 100 && OffTemp < OnTemp) OffTemp++;
-				  break;
-				case ITEM_ON:
-				  // increase ON Temp
-				  if (OnTemp < 100) OnTemp++;
-				  break;
-				case ITEM_MODE: 
-				  // change MODE
-				  switchMode(true);
-				  break;
+			if (ButtonActive[BTNSEL]){
+				if (_DEBUG_) Serial.println("Button SEL Released");
+				ButtonActive[BTNSEL] = false;
 			}
 		}
-	}
-  }
-  else{
-    if (ButtonActive[BTNUP]){
-      if (_DEBUG_) Serial.println("Button UP Released");
-      ButtonActive[BTNUP] = false;
-    }
-  }
-  
-  if (ButtonState[BTNDWN] == LOW){
-    LastAction = currentMillis;
-    if (!ButtonActive[BTNDWN]){
-		if (_DEBUG_) Serial.println("Button DWN Pressed");
-		ButtonActive[BTNDWN] = true;
-		if (StandBy){
-			StandBy = false;
-		}
-		else{
-		    Saved = false;
-			switch (SelectedItem){
-				case ITEM_OFF:
-				  // decrease OFF Temp
-				  if (OffTemp > 25) OffTemp--;
-				  break;
-				case ITEM_ON:
-				  // decrease ON Temp
-				  if (OnTemp > 25 && OnTemp > OffTemp) OnTemp--;
-				  break;
-				case ITEM_MODE: 
-				  // change MODE
-				  switchMode(false);
-				  break;
+
+		if (ButtonState[BTNUP] == LOW){
+			LastAction = currentMillis;
+			if (!ButtonActive[BTNUP]){
+				if (_DEBUG_) Serial.println("Button UP Pressed");
+				ButtonActive[BTNUP] = true;
+				if (StandBy){
+				StandBy = false;
+				}
+				else{
+					Saved = false;
+					switch (SelectedItem){
+						case ITEM_OFF:
+							// increase OFF Temp
+							if (OffTemp < 100 && OffTemp < OnTemp) OffTemp++;
+							break;
+						case ITEM_ON:
+							// increase ON Temp
+							if (OnTemp < 100) OnTemp++;
+							break;
+						case ITEM_MODE: 
+							// change MODE
+							switchMode(true);
+							break;
+					}
+				}
 			}
 		}
+		else{
+		if (ButtonActive[BTNUP]){
+		if (_DEBUG_) Serial.println("Button UP Released");
+		ButtonActive[BTNUP] = false;
+		}
+		}
+
+		if (ButtonState[BTNDWN] == LOW){
+			LastAction = currentMillis;
+			if (!ButtonActive[BTNDWN]){
+				if (_DEBUG_) Serial.println("Button DWN Pressed");
+				ButtonActive[BTNDWN] = true;
+				if (StandBy){
+				StandBy = false;
+				}
+				else{
+					Saved = false;
+					switch (SelectedItem){
+						case ITEM_OFF:
+							// decrease OFF Temp
+							if (OffTemp > 25) OffTemp--;
+							break;
+						case ITEM_ON:
+							// decrease ON Temp
+							if (OnTemp > 25 && OnTemp > OffTemp) OnTemp--;
+							break;
+						case ITEM_MODE: 
+							// change MODE
+							switchMode(false);
+							break;
+					}
+				}
+			}
+		}
+		else{
+			if (ButtonActive[BTNDWN] == true){    
+				if (_DEBUG_) Serial.println("Button DWN Released");
+				ButtonActive[BTNDWN] = false;
+			}
+		}    
+		previousMillis = currentMillis;
 	}
-  }
-  else{
-    if (ButtonActive[BTNDWN] == true){    
-      if (_DEBUG_) Serial.println("Button DWN Released");
-      ButtonActive[BTNDWN] = false;
-    }
-  }    
-  
-  previousMillis = currentMillis;
-  }
 }
 
-void checkChangeMode(void){
-  // 0 = MODE_ALL_OFF     1 = MODE_ALL_ON      2 = MODE_AUTO     
-  clearLCDbottom();
-  switch (ActiveMode){
-    case MODE_ALL_OFF:
-      closeAllVALVE();
-      break;
-    case MODE_ALL_ON:
-      openAllVALVE();
-      break;
-    case MODE_AUTO: 
-      initAutoMode();
-      break;
-  }
-  if (_DEBUG_) Serial.print("Mode: ");
-  if (_DEBUG_) Serial.println(ModeName[ActiveMode]);
+void checkChangeMode(void) {
+	// 0 = MODE_ALL_OFF     1 = MODE_ALL_ON      2 = MODE_AUTO     
+	clearLCDbottom();
+	switch (ActiveMode) {
+		case MODE_ALL_OFF:
+			closeAllVALVE();
+			break;
+		case MODE_ALL_ON:
+			openAllVALVE();
+			break;
+		case MODE_AUTO: 
+			initAutoMode();
+			break;
+	}
+	if (_DEBUG_) Serial.print("Mode: ");
+	if (_DEBUG_) Serial.println(ModeName[ActiveMode]);
 }
 
-void saveData(void){
-  if (((unsigned long)(currentMillis - LastAction) > TimerSave) && !Saved){
+void saveData(void) {
+  if (((unsigned long)(currentMillis - LastAction) > TimerSave) && !Saved) {
     if (_DEBUG_) Serial.println("Saving Data");
     EEPROM.update(EETEMP_OFF_ADDR, OffTemp);
     EEPROM.update(EETEMP_ON_ADDR, OnTemp);
@@ -368,18 +460,18 @@ void saveData(void){
 }
 
 // LCD Session
-void refreshLCD(void){
-  if (StandBy){
+void refreshLCD(void) {
+  if (StandBy) {
 	screenSaver();
   }
-  else{
-	  if ((unsigned long)(currentMillis - LastAction) > TimerStandby){
-		if (!StandBy){
+  else {
+	  if ((unsigned long)(currentMillis - LastAction) > TimerStandby) {
+		if (!StandBy) {
 			screenSaver();
 			StandBy = true;
 		}
 	  }
-	  else{
+	  else {
 		// write mode 
 		writeModeLCD();
 		// write sensor temperatures
@@ -392,56 +484,68 @@ void refreshLCD(void){
    }
 }
 
-void writeSensTempLCD(void){
-  for (int i = 0; i < NUMBOILER; i++){
-    lcd.setCursor(startPositionLCD[i][0],startPositionLCD[i][1]);
-    lcd.print(LetterBoiler[i]);
-	if (RelayStatus[i])
-      lcd.write((uint8_t)1);  // ON Char
-    else{
-      lcd.print(" ");
+void writeSensTempLCD(void) {
+	for (int i = 0; i < NUMBOILER; i++) {
+		lcd.setCursor(startPositionLCD[i][0],startPositionLCD[i][1]);
+		lcd.print(LetterBoiler[i]);
+		if (RelayStatus[i])
+			lcd.write((uint8_t)1);  // ON Char
+		else {
+			lcd.print(" ");
+		}
+		if (TempValue[i] == -127) {
+			lcd.print("err ");
+		}
+		else {
+			if (TempValue[i] < 10) {
+				lcd.print(" ");
+			}
+			lcd.print(TempValue[i]);
+			lcd.write((uint8_t)0);    // degree char
+		}
 	}
-    if (TempValue[i] == -127){
-      lcd.print("err ");
-    }
-    else{
-      if (TempValue[i] < 10){
-        lcd.print(" ");
-	  }
-      lcd.print(TempValue[i]);
-      lcd.write((uint8_t)0);    // degree char
-    }
-  }
 }
 
-void writeCursorLCD(void){
-  lcd.setCursor(7,3);
-  lcd.print("     ");     // clear cursor space
-  switch (SelectedItem){
-    case ITEM_OFF:
-      lcd.setCursor(11,3);
-      lcd.print((char)126); // right arrow
-      break;
-    case ITEM_ON:
-      lcd.setCursor(7,3);
-      lcd.print((char)127); // left arrow
-      break;
-    case ITEM_MODE: 
-      lcd.setCursor(9,3);
-      lcd.write((uint8_t)2); // up arrow
-      break;
-  }
+void writeCursorLCD(void) {
+	lcd.setCursor(7,3);
+	lcd.print("     ");     // clear cursor space
+	switch (SelectedItem) {
+		case ITEM_OFF:
+			lcd.setCursor(11,3);
+			lcd.print((char)126); // right arrow
+			break;
+		case ITEM_ON:
+			lcd.setCursor(7,3);
+			lcd.print((char)127); // left arrow
+			break;
+		case ITEM_MODE: 
+			lcd.setCursor(9,3);
+			lcd.write((uint8_t)2); // up arrow
+			break;
+	}
 }
 
-void writeModeLCD(void){
-  // write Mode
-  lcd.setCursor(7,2);
-  lcd.print(ModeName[ActiveMode]);
+void writeModeLCD(void) {
+	// write Mode
+	lcd.setCursor(7,2);
+	lcd.print(ModeName[ActiveMode]);
+	lcd.setCursor(14,2);
+	if (isSafeMode()) {
+		lcd.print("SAFE ");
+		for (int i = 0; i < NUMBOILER; i++) {
+			if (RelaySafeMode[i]) {
+				lcd.print(LetterBoiler[i]);
+			}
+		}
+	}
+	else {
+		lcd.print("      ");
+	}
 }
 
-void writeThersoldLCD(void){
+void writeThersoldLCD(void) {
   // write temp threshold if MODE_AUTO
-  if (ActiveMode == MODE_AUTO){
+  if (ActiveMode == MODE_AUTO) {
     lcd.setCursor(0,3);
     lcd.print("ON ");
     lcd.print(OnTemp);
@@ -454,130 +558,130 @@ void writeThersoldLCD(void){
 }
 
 //  init Session
-void initLCD(void){
-  if (_DEBUG_) Serial.println("initLCD");
-  lcd.begin(20,4);
-  //lcd.backlight();
-  lcd.createChar(0, customDeg);
-  lcd.createChar(1, customON);
-  lcd.createChar(2, customUpArrow);  
-  
-  lcd.setCursor(0, 0);
-  lcd.print("Powered by");
-  lcd.setCursor(3, 1);
-  lcd.print("C.D. Impianti");
-  lcd.setCursor(5, 2);
-  lcd.print("tel 392/0581809");
-  lcd.setCursor(0, 3);
-  lcd.print("E#");
-  lcd.setCursor(15, 3);
-  lcd.print("v");
-  lcd.print(VERSION);
-  lcd.home();
+void initLCD(void) {
+	if (_DEBUG_) Serial.println("initLCD");
+	lcd.begin(20,4);
+	//lcd.backlight();
+	lcd.createChar(0, customDeg);
+	lcd.createChar(1, customON);
+	lcd.createChar(2, customUpArrow);  
+
+	lcd.setCursor(0, 0);
+	lcd.print("Powered by");
+	lcd.setCursor(3, 1);
+	lcd.print("C.D. Impianti");
+	lcd.setCursor(5, 2);
+	lcd.print("tel 392/0581809");
+	lcd.setCursor(0, 3);
+	lcd.print("E#");
+	lcd.setCursor(15, 3);
+	lcd.print("v");
+	lcd.print(VERSION);
+	lcd.home();
 }
 
-void initRelay(void){
-  if (_DEBUG_) Serial.println("initRelay");
-  for (int i = 0; i < NUMBOILER; i++){
-    pinMode(RelayPin[i], OUTPUT);
-  }
-  closeAllVALVE();
+void initRelay(void) {
+	if (_DEBUG_) Serial.println("initRelay");
+	for (int i = 0; i < NUMBOILER; i++) {
+		pinMode(RelayPin[i], OUTPUT);
+	}
+	closeAllVALVE();
 }
 
-void initButton(void){
-  if (_DEBUG_) Serial.println("initButton");
-  pinMode(ButtonPin[BTNSEL], INPUT_PULLUP);
-  pinMode(ButtonPin[BTNDWN], INPUT_PULLUP);
-  pinMode(ButtonPin[BTNUP],  INPUT_PULLUP);
+void initButton(void) {
+	if (_DEBUG_) Serial.println("initButton");
+	pinMode(ButtonPin[BTNSEL], INPUT_PULLUP);
+	pinMode(ButtonPin[BTNDWN], INPUT_PULLUP);
+	pinMode(ButtonPin[BTNUP],  INPUT_PULLUP);
 }
 
-void initEEprom(void){
-  if (_DEBUG_) Serial.println("initEEPROM");
-  if (EEPROM.read(EEMAGICADDR) == EEMAGICVALUE){
-    // already inizialized
-    if (_DEBUG_) Serial.println("EEPROM already inizialized");
-    OnTemp     = EEPROM.read(EETEMP_ON_ADDR);
-    OffTemp    = EEPROM.read(EETEMP_OFF_ADDR);
-    ActiveMode = EEPROM.read(EEMODE_ADDR);
-    if (_DEBUG_) Serial.print("EEPROM OnTemp: ");
-    if (_DEBUG_) Serial.println(OnTemp);
-    if (_DEBUG_) Serial.print("EEPROM OffTemp: ");
-    if (_DEBUG_) Serial.println(OffTemp);    
-    if (_DEBUG_) Serial.print("EEPROM Mode: ");
-    if (_DEBUG_) Serial.println(ActiveMode);
-  }
-  else{
-    // first boot never inizialized
-    if (_DEBUG_) Serial.println("First Boot");
-    EEPROM.update(EEMAGICADDR, EEMAGICVALUE);
-    EEPROM.update(EETEMP_ON_ADDR, OnTemp);
-    EEPROM.update(EETEMP_OFF_ADDR, OffTemp);
-    EEPROM.update(EEMODE_ADDR, ActiveMode);
-  }
+void initEEprom(void) {
+	if (_DEBUG_) Serial.println("initEEPROM");
+	if (EEPROM.read(EEMAGICADDR) == EEMAGICVALUE) {
+		// already inizialized
+		if (_DEBUG_) Serial.println("EEPROM already inizialized");
+		OnTemp     = EEPROM.read(EETEMP_ON_ADDR);
+		OffTemp    = EEPROM.read(EETEMP_OFF_ADDR);
+		ActiveMode = EEPROM.read(EEMODE_ADDR);
+		if (_DEBUG_) Serial.print("EEPROM OnTemp: ");
+		if (_DEBUG_) Serial.println(OnTemp);
+		if (_DEBUG_) Serial.print("EEPROM OffTemp: ");
+		if (_DEBUG_) Serial.println(OffTemp);    
+		if (_DEBUG_) Serial.print("EEPROM Mode: ");
+		if (_DEBUG_) Serial.println(ActiveMode);
+	}
+	else {
+		// first boot never inizialized
+		if (_DEBUG_) Serial.println("First Boot");
+		EEPROM.update(EEMAGICADDR, EEMAGICVALUE);
+		EEPROM.update(EETEMP_ON_ADDR, OnTemp);
+		EEPROM.update(EETEMP_OFF_ADDR, OffTemp);
+		EEPROM.update(EEMODE_ADDR, ActiveMode);
+	}
 }
 
-void initSensor(void){
-   if (_DEBUG_) Serial.println("initSensor");
-   if (_DEBUG_) Serial.print("Found ");
-   if (_DEBUG_) Serial.print(sensors.getDeviceCount(), DEC);
-   if (_DEBUG_) Serial.println(" devices.");
-   for (int i = 0; i < NUMBOILER; i++){
-     sensors.setResolution(TempAddress[i], TEMPERATURE_PRECISION);
-   }
+void initSensor(void) {
+	if (_DEBUG_) Serial.println("initSensor");
+	if (_DEBUG_) Serial.print("Found ");
+	if (_DEBUG_) Serial.print(sensors.getDeviceCount(), DEC);
+	if (_DEBUG_) Serial.println(" devices.");
+	for (int i = 0; i < NUMBOILER; i++) {
+		sensors.setResolution(TempAddress[i], TEMPERATURE_PRECISION);
+	}
 }
 
 //  Temperature Sensor Session
-void scanSensors(void){
-  if((unsigned long)(currentMillis - LastReadTemperature) > TimerTemperature){
-    sensors.requestTemperatures();    
-    for (int i = 0; i < NUMBOILER; i++){
-      TempValue[i] = (int) sensors.getTempC(TempAddress[i]);
-      if (_DEBUG_) Serial.print(LetterBoiler[i]);
-      if (_DEBUG_) Serial.print(": ");
-      if (_DEBUG_) Serial.print(TempValue[i]);
-      if (_DEBUG_) Serial.print("C - ");
-    }
-    if (_DEBUG_) Serial.println(" ");
-    LastReadTemperature = currentMillis;
-  }
-  tempControl();
+void scanSensors(void) {
+	if((unsigned long)(currentMillis - LastReadTemperature) > TimerTemperature) {
+		sensors.requestTemperatures();    
+		for (int i = 0; i < NUMBOILER; i++) {
+			TempValue[i] = (int) sensors.getTempC(TempAddress[i]);
+			if (_DEBUG_) Serial.print(LetterBoiler[i]);
+			if (_DEBUG_) Serial.print(": ");
+			if (_DEBUG_) Serial.print(TempValue[i]);
+			if (_DEBUG_) Serial.print("C - ");
+		}
+		if (_DEBUG_) Serial.println(" ");
+		LastReadTemperature = currentMillis;
+	}
+	tempControl();
 }
 
 // LCD Session
-void screenSaver(){
-  writeModeLCD();
-  writeSensTempLCD();
-  lcd.setCursor(0,3);
-  lcd.print("                    ");
+void screenSaver() {
+	writeModeLCD();
+	writeSensTempLCD();
+	lcd.setCursor(0,3);
+	lcd.print("                    ");
 }
 
-void clearLCDtop(void){
-  lcd.setCursor(0,0);
-  lcd.print("                    ");
-  lcd.setCursor(0,1);
-  lcd.print("                    ");
+void clearLCDtop(void) {
+	lcd.setCursor(0,0);
+	lcd.print("                    ");
+	lcd.setCursor(0,1);
+	lcd.print("                    ");
 }
 
-void clearLCDbottom(void){
-  lcd.setCursor(0,2);
-  lcd.print("                    ");
-  lcd.setCursor(0,3);
-  lcd.print("                    ");
+void clearLCDbottom(void) {
+	lcd.setCursor(0,2);
+	lcd.print("                    ");
+	lcd.setCursor(0,3);
+	lcd.print("                    ");
 }
 
 // Relay Session
-void closeAllVALVE(void){
-  if (_DEBUG_) Serial.println("closeAllVALVE");
-  for (int i = 0; i < NUMBOILER; i++){
-    digitalWrite(RelayPin[i], CLOSE_VALVE);
-    RelayStatus[i] = false;
-  }
+void closeAllVALVE(void) {
+	if (_DEBUG_) Serial.println("closeAllVALVE");
+	for (int i = 0; i < NUMBOILER; i++) {
+		digitalWrite(RelayPin[i], CLOSE_VALVE);
+		RelayStatus[i] = false;
+	}
 }
 
-void openAllVALVE(void){
-  if (_DEBUG_) Serial.println("openAllVALVE");
-  for (int i = 0; i < NUMBOILER; i++){
-    digitalWrite(RelayPin[i], OPEN_VALVE);
-    RelayStatus[i] = true;
-  }
+void openAllVALVE(void) {
+	if (_DEBUG_) Serial.println("openAllVALVE");
+	for (int i = 0; i < NUMBOILER; i++) {
+		digitalWrite(RelayPin[i], OPEN_VALVE);
+		RelayStatus[i] = true;
+	}
 }
