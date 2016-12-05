@@ -14,67 +14,67 @@
 
 
 // DEFINITIONS
-#define _DEBUG_               true
-#define VERSION               1.02
-#define NUMBOILER             5 // number of boiler
-#define MODE_ALL_OFF          0 // Mode all relay OFF
-#define MODE_ALL_ON           1 // Mode all relay ON
-#define MODE_AUTO             2 // Mode Automatic
-#define ITEM_OFF              0 // Menu Item OFF
-#define ITEM_ON               1 // Menu Item ON
-#define ITEM_MODE             2 // Menu Item Mode
-#define OPEN_VALVE		   HIGH //  relay OFF valve OPEN
-#define CLOSE_VALVE		    LOW //  relay ON valve CLOSE
-                              
-// EEPROM                     
-#define DEFAULTON            60   // default centigrade temp for on relay
-#define DEFAULTOFF           40   // default centigrade temp for off relay
-#define EEMAGICADDR           0   // eeprom address of magic byte
-#define EEMAGICVALUE         78   // eeprom value of magic byte
-#define EETEMP_OFF_ADDR       2   // eeprom address of OFF temperaure
-#define EETEMP_ON_ADDR        3   // eeprom address of ON temperaure
-#define EEMODE_ADDR           4   // eeprom MODE address (save current active MODE)
-                              
-// BUTTON                     
-#define BTNUP                 0
-#define BTNDWN                1
-#define BTNSEL                2
+#define _DEBUG_					true
+#define VERSION					1.02
+#define NUMBOILER				5	// number of boiler
+#define MODE_ALL_OFF			0	// Mode all relay OFF
+#define MODE_ALL_ON				1	// Mode all relay ON
+#define MODE_AUTO				2	// Mode Automatic
+#define ITEM_OFF				0	// Menu Item OFF
+#define ITEM_ON					1	// Menu Item ON
+#define ITEM_MODE				2	// Menu Item Mode
+#define OPEN_VALVE				HIGH//  relay OFF valve OPEN
+#define CLOSE_VALVE				LOW	//  relay ON valve CLOSE
+
+// EEPROM
+#define DEFAULTON				60	// default centigrade temp for on relay
+#define DEFAULTOFF				40	// default centigrade temp for off relay
+#define EEMAGICADDR				0	// eeprom address of magic byte
+#define EEMAGICVALUE			78	// eeprom value of magic byte
+#define EETEMP_OFF_ADDR			2	// eeprom address of OFF temperaure
+#define EETEMP_ON_ADDR			3	// eeprom address of ON temperaure
+#define EEMODE_ADDR				4	// eeprom MODE address (save current active MODE)
+
+// BUTTON
+#define BTNUP					0
+#define BTNDWN					1
+#define BTNSEL					2
 
 //DS18B20
-#define ONE_WIRE_BUS          9   // one wire pin 
-#define TEMPERATURE_PRECISION 9
+#define ONE_WIRE_BUS			9	// one wire pin 
+#define TEMPERATURE_PRECISION	9
 
 // system
-unsigned long currentMillis  = 0;
-unsigned long previousMillis = 0; // millis() returns an unsigned long.
-int SelectedItem             = ITEM_MODE;      // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITEM_MODE
-int ActiveMode               = MODE_AUTO;      // default MODE
-const char LetterBoiler[]    = {"ABCDEF"};
-const String ModeName[]      = {"ALL OFF","ALL ON"," AUTO"};
-const long TimerSave         = 30000; //save data 30 seconds after last push button
-const long TimerStandby      = 60000; //go in standby 1 minute after last push button
-const long TimerTemperature  = 1000;  //read temperature every 1 second
+unsigned long currentMillis		= 0;
+unsigned long previousMillis	= 0; // millis() returns an unsigned long.
+int SelectedItem				= ITEM_MODE;      // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITEM_MODE
+int ActiveMode					= MODE_AUTO;      // default MODE
+const char LetterBoiler[]		= {"ABCDEF"};
+const String ModeName[]			= {"ALL OFF","ALL ON"," AUTO"};
+const long TimerSave			= 30000; //save data 30 seconds after last push button
+const long TimerStandby			= 60000; //go in standby 1 minute after last push button
+const long TimerTemperature		= 1000;  //read temperature every 1 second
 unsigned long LastReadTemperature= 0;
-boolean Saved                = false;
-unsigned long LastAction     = 0;
-boolean StandBy              = true;
-                             
-//  buttons                  
-const int ButtonPin[]        = {10, 11, 12};   // push button is attached to this pin
-int ButtonState[]            = {HIGH,HIGH,HIGH};
-boolean ButtonActive[]       = {false,false,false};
-const long debounceDelay     = 50;
-                             
-// relay                     
-const int RelayPin[]         = {2, 3, 4, 5, 6, 7};  // relay attached to this pin 
-boolean RelayStatus[]        = {false, false, false, false, false, false};
-boolean RelaySafeMode[]      = {false, false, false, false, false, false};
-                             
-// temperature               
-int OnTemp                   = DEFAULTON;
-int OffTemp                  = DEFAULTOFF;
-int TempValue[]              = {0,0,0,0,0,0};
-DeviceAddress TempAddress[]  = {
+boolean Saved					= false;
+unsigned long LastAction		= 0;
+boolean StandBy					= true;
+
+//  buttons
+const int ButtonPin[]			= {10, 11, 12};   // push button is attached to this pin
+int ButtonState[]				= {HIGH,HIGH,HIGH};
+boolean ButtonActive[]			= {false,false,false};
+const long debounceDelay		= 50;
+
+// relay
+const int RelayPin[]			= {2, 3, 4, 5, 6, 7};  // relay attached to this pin 
+boolean RelayStatus[]			= {false, false, false, false, false, false};
+boolean RelaySafeMode[]			= {false, false, false, false, false, false};
+
+// temperature
+int OnTemp						= DEFAULTON;
+int OffTemp						= DEFAULTOFF;
+int TempValue[]					= {0,0,0,0,0,0};
+DeviceAddress TempAddress[]		= {
   { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 }, // A
   { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 }, // B
   { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE }, // C
@@ -84,21 +84,21 @@ DeviceAddress TempAddress[]  = {
 };
 
 // LCD
-#define I2C_ADDR          0x20
-#define BACKLIGHT_PIN        7
-#define En_pin               4
-#define Rw_pin               5
-#define Rs_pin               6
-#define D4_pin               0
-#define D5_pin               1
-#define D6_pin               2
-#define D7_pin               3
+#define I2C_ADDR				0x20
+#define BACKLIGHT_PIN			7
+#define En_pin					4
+#define Rw_pin					5
+#define Rs_pin					6
+#define D4_pin					0
+#define D5_pin					1
+#define D6_pin					2
+#define D7_pin					3
 const int startPositionLCD[][2] = {{0 ,0}, {7 ,0}, {14,0}, {0 ,1}, {7 ,1}, {14,1}};  // column and row position of each temp value on LCD 
 
 // custom char
-byte customDeg[8]     = {B01000, B10100, B01000, B00011, B00100, B00100, B00011, B00000};
-byte customON[8]      = {B00000, B00000, B01100, B11110, B11110, B01100, B00000, B00000};
-byte customUpArrow[8] = {B00100, B01110, B10101, B00100, B00100, B00100, B00000, B00000};
+byte customDeg[8]			= {B01000, B10100, B01000, B00011, B00100, B00100, B00011, B00000};
+byte customON[8]			= {B00000, B00000, B01100, B11110, B11110, B01100, B00000, B00000};
+byte customUpArrow[8]		= {B00100, B01110, B10101, B00100, B00100, B00100, B00000, B00000};
 
 
 // DECLARATION
