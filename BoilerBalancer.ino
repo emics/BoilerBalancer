@@ -1,11 +1,10 @@
-////////////////////////////////////////////////////
-//                                                //
-//              Balance Boiler 1.02               //
-//                                                //
-////////////////////////////////////////////////////
+//////////////////////////////////////////////////////
+//													//
+//				Balance Boiler 1.03					//
+//													//
+//////////////////////////////////////////////////////
 
 // INCLUSIONS
-//#include <OneWire.h>
 #include <DallasTemperature.h>
 #include <EEPROM.h>
 #include <Wire.h>
@@ -15,8 +14,22 @@
 
 // DEFINITIONS
 #define _DEBUG_					true
-#define VERSION					1.02
-#define NUMBOILER				5	// number of boiler
+#define VERSION					1.03
+#define NUMBOILER				5	// number of boiler [min 2 max 6]
+const int RelayPin[]			= {2, 3, 4, 5, 6, 7};  // relay attached to this pin {A, B, C, D, E, F}
+DeviceAddress TempAddress[]		= {
+  { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 }, // A
+  { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 }, // B
+  { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE }, // C
+  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D
+  { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 }, // E
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }  // F
+};
+
+//////////////////////////////////////////////////////
+/////////////// END configuration Part ///////////////
+//////////////////////////////////////////////////////
+
 #define MODE_ALL_OFF			0	// Mode all relay OFF
 #define MODE_ALL_ON				1	// Mode all relay ON
 #define MODE_AUTO				2	// Mode Automatic
@@ -66,7 +79,6 @@ boolean ButtonActive[]			= {false,false,false};
 const long debounceDelay		= 50;
 
 // relay
-const int RelayPin[]			= {2, 3, 4, 5, 6, 7};  // relay attached to this pin 
 boolean RelayStatus[]			= {false, false, false, false, false, false};
 boolean RelaySafeMode[]			= {false, false, false, false, false, false};
 
@@ -74,14 +86,6 @@ boolean RelaySafeMode[]			= {false, false, false, false, false, false};
 int OnTemp						= DEFAULTON;
 int OffTemp						= DEFAULTOFF;
 int TempValue[]					= {0,0,0,0,0,0};
-DeviceAddress TempAddress[]		= {
-  { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 }, // A
-  { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 }, // B
-  { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE }, // C
-  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D
-  { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 }, // E
-  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }  // F
-};
 
 // LCD
 #define I2C_ADDR				0x20
@@ -240,19 +244,25 @@ void checkSafeMode(void) {
 }
 
 boolean isSafeMode(void) {
-	// check if all VALVE are false
+	// check if all VALVE are not in Safe Mode (false)
 	boolean tmp = false;
 	for (int i = 0; i < NUMBOILER; i++) {
 		if (RelaySafeMode[i]) {
-			tmp = true;
+			tmp = true;			// Found one VALVE in Safe Mode
+			i = NUMBOILER;		// exit
 		}
+	}
+	if (_DEBUG_) {
+		if (tmp) Serial.println("Safe Mode");
 	}
 	return tmp;
 }
 
 void exitSafeMode(void) {
+	// exit from Safe Mode
+	// set all Relay SafeMode  = false
 	for (int i = 0; i < NUMBOILER; i++) {
-		if (RelaySafeMode[i]) {
+		if (RelaySafeMode[i]) {	// check if a VALVE is in SafeMode
 			digitalWrite(RelayPin[i], CLOSE_VALVE);
 			RelayStatus[i] = false;
 			RelaySafeMode[i] = false;
@@ -261,12 +271,16 @@ void exitSafeMode(void) {
 }
 
 boolean isAllClose(void) {
-	// check if all VALVE are CLOSED
+	// check if all VALVE are CLOSED (true)
 	boolean tmp = true;
 	for (int i = 0; i < NUMBOILER; i++) {
 		if (RelayStatus[i]) {
-			tmp = false;
+			tmp = false;		// Found one VALVE OPEN
+			i = NUMBOILER;		// exit
 		}
+	}
+	if (_DEBUG_) {
+		if (tmp) Serial.println("All Valve are Close");
 	}
 	return tmp;
 }
@@ -280,6 +294,10 @@ int foundMaxTemp(void) {
 			maxNumber = i;
 			maxTemp = TempValue[i];
 		}
+	}
+	if (_DEBUG_) {
+		Serial.print("Max Temperature: ");
+		Serial.print(maxNumber);
 	}
 	return maxNumber;
 }
