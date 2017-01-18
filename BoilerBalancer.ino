@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////
 //													//
-//				Balance Boiler 1.03					//
+//				Balance Boiler 1.04					//
 //													//
 //////////////////////////////////////////////////////
 
@@ -10,20 +10,23 @@
 #include <Wire.h>
 #include <LCD.h>
 #include <LiquidCrystal_I2C.h>
+#include <EasyTransfer.h>
 
 
 // DEFINITIONS
 #define _DEBUG_					true
-#define VERSION					1.03
-#define NUMBOILER				5	// number of boiler [min 2 max 6]
+#define _TXSERIAL_				false
+#define VERSION					1.04
+#define NUMBOILER				6	// number of boiler [min 2 max 6]
+#define ONE_WIRE_BUS			9	// one wire pin DS18B20
 const int RelayPin[]			= {2, 3, 4, 5, 6, 7};  // relay attached to this pin {A, B, C, D, E, F}
 DeviceAddress TempAddress[]		= {
   { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 }, // A
   { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 }, // B
   { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE }, // C
-  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D
+  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D  
   { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 }, // E
-  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }  // F
+  { 0x28, 0xFF, 0x7E, 0xC9, 0x73, 0x16, 0x04, 0x01 }  // F
 };
 
 //////////////////////////////////////////////////////
@@ -36,8 +39,8 @@ DeviceAddress TempAddress[]		= {
 #define ITEM_OFF				0	// Menu Item OFF
 #define ITEM_ON					1	// Menu Item ON
 #define ITEM_MODE				2	// Menu Item Mode
-#define OPEN_VALVE				HIGH//  relay OFF valve OPEN
-#define CLOSE_VALVE				LOW	//  relay ON valve CLOSE
+#define OPEN_VALVE				HIGH// relay OFF valve OPEN
+#define CLOSE_VALVE				LOW	// relay ON valve CLOSE
 
 // EEPROM
 #define DEFAULTON				60	// default centigrade temp for on relay
@@ -53,8 +56,7 @@ DeviceAddress TempAddress[]		= {
 #define BTNDWN					1
 #define BTNSEL					2
 
-//DS18B20
-#define ONE_WIRE_BUS			9	// one wire pin 
+//DS18B20 
 #define TEMPERATURE_PRECISION	9
 
 // system
@@ -64,12 +66,16 @@ int SelectedItem				= ITEM_MODE;      // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITE
 int ActiveMode					= MODE_AUTO;      // default MODE
 const char LetterBoiler[]		= {"ABCDEF"};
 const String ModeName[]			= {"ALL OFF","ALL ON"," AUTO"};
-const long TimerSave			= 30000; //save data 30 seconds after last push button
-const long TimerStandby			= 60000; //go in standby 1 minute after last push button
-const long TimerTemperature		= 1000;  //read temperature every 1 second
-unsigned long LastReadTemperature= 0;
+const long TimerSave			= 30000; // save data 30 seconds after last push button
+const long TimerStandby			= 60000; // go in standby 1 minute after last push button
+const long TimerTemperature		= 1000;  // read temperature every 1 second
+const long TimerSerialData		= 10000; // send data temperature on serial line every 10 seconds
+const long TimerSwitch			= 10000; // switch one relay at least after 10 seconds from other relay switch
+unsigned long LastReadTemperature= TimerTemperature + 1;
+unsigned long LastAction		= TimerStandby + 1;
+unsigned long LastSendData		= 0;
+unsigned long LastSwitch		= TimerSwitch + 1; // init at high value for start switching immediatly after power on
 boolean Saved					= false;
-unsigned long LastAction		= 0;
 boolean StandBy					= true;
 
 //  buttons
@@ -111,18 +117,28 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 // LCD Library
 LiquidCrystal_I2C  lcd(I2C_ADDR,En_pin,Rw_pin,Rs_pin,D4_pin,D5_pin,D6_pin,D7_pin); 
+// EasyTransfer object
+EasyTransfer ET;
 
+struct SEND_DATA_STRUCTURE{
+  int TempValue[];
+  boolean RelayStatus[];
+  int ActiveMode;
+};
 
+SEND_DATA_STRUCTURE txData;
 
 //
 // SETUP
 //
 void setup(void) {
-	if (_DEBUG_)
-	{
-		Serial.begin(9600);
+	Serial.begin(9600);
+	if (_DEBUG_) {
 		Serial.print("BOILER: ");
 		Serial.println(NUMBOILER);
+	}
+	if (_TXSERIAL_) {
+		ET.begin(details(txData), &Serial);
 	}
 	initEEprom();
 	initRelay();
@@ -143,6 +159,7 @@ void loop(void) {
 	scanSensors();
 	refreshLCD();
 	saveData();
+	sendSerialData();
 }
 
 void tempControl(void) {
@@ -151,33 +168,34 @@ void tempControl(void) {
 			// check if some sensor are in error
 			if (TempValue[i] == -127) {
 				// sensor in error -  OPEN VALVE
-				digitalWrite(RelayPin[i], OPEN_VALVE);
-				RelayStatus[i] = true;
+				//doVALVE(i, OPEN_VALVE, false);
 			}
 			else { 
 				if (RelayStatus[i]) {
 					// Relay already ON valve OPEN
-					if (TempValue[i] <= OffTemp) {   
-						if (!RelaySafeMode[i]) { // check if not in SafeMode
+					if (!RelaySafeMode[i]) { // check if not in SafeMode
+						if (TempValue[i] <= OffTemp) {   
 							// CLOSE valve - the temperature is cold
 							if (_DEBUG_) Serial.print("CLOSE valve: ");
 							if (_DEBUG_) Serial.println(LetterBoiler[i]);
-							digitalWrite(RelayPin[i], CLOSE_VALVE);
-							RelayStatus[i] = false;
+							doVALVE(i, CLOSE_VALVE, false);
 						}
+					}
+					else {
+						// Exit Safe Mode from Relay already ON
+						// and Temperature is mucher than midTemp
+						int midTemp = (OnTemp + OffTemp) / 2;
+						if (TempValue[i] >= midTemp) exitSafeMode();  // exit from SafeMode
 					}
 				}
 				else {
 					// Relay already OFF valve CLOSE
 					if (TempValue[i] >= OnTemp) {
-						// OPEN valve - the temperature is hot
+						// OPEN valve - the temperature is HOT
 						if (_DEBUG_) Serial.print("OPEN valve: ");
 						if (_DEBUG_) Serial.println(LetterBoiler[i]);
-						digitalWrite(RelayPin[i], OPEN_VALVE);
-						RelayStatus[i] = true;
-						if (isSafeMode()) {
-							exitSafeMode();  // exit from SafeMode
-						}
+						doVALVE(i, OPEN_VALVE, false);
+						if (isSafeMode()) exitSafeMode();  // exit from SafeMode
 					}
 				}
 			}
@@ -188,23 +206,21 @@ void tempControl(void) {
 
 void initAutoMode(void) {
 	if (ActiveMode == MODE_AUTO) {
-	int midTemp = (OnTemp + OffTemp) / 2;
-	if (_DEBUG_) Serial.print("Mid Temp: ");
-	if (_DEBUG_) Serial.println(midTemp);
-	for (int i = 0; i < NUMBOILER; i++) {
-		if (TempValue[i] <= midTemp) {
-			// CLOSE valve - the temperature is cold
-			if (_DEBUG_) Serial.print("CLOSE valve: ");
-			if (_DEBUG_) Serial.println(LetterBoiler[i]);
-			digitalWrite(RelayPin[i], CLOSE_VALVE);
-			RelayStatus[i] = false;
-		}
-		else {
-			// OPEN valve - the temperature is hot
-			if (_DEBUG_) Serial.print("OPEN valve: ");
-			if (_DEBUG_) Serial.println(LetterBoiler[i]);
-			digitalWrite(RelayPin[i], OPEN_VALVE);
-			RelayStatus[i] = true;
+		int midTemp = (OnTemp + OffTemp) / 2;
+		if (_DEBUG_) Serial.print("Mid Temp: ");
+		if (_DEBUG_) Serial.println(midTemp);
+		for (int i = 0; i < NUMBOILER; i++) {
+			if (TempValue[i] <= midTemp) {
+				// CLOSE valve - the temperature is cold
+				if (_DEBUG_) Serial.print("CLOSE valve: ");
+				if (_DEBUG_) Serial.println(LetterBoiler[i]);
+				doVALVE(i, CLOSE_VALVE, false);
+			}
+			else {
+				// OPEN valve - the temperature is hot
+				if (_DEBUG_) Serial.print("OPEN valve: ");
+				if (_DEBUG_) Serial.println(LetterBoiler[i]);
+				doVALVE(i, OPEN_VALVE, false);
 			}
 		}
 	}
@@ -216,25 +232,22 @@ void checkSafeMode(void) {
 			// if all VALVE are CLOSED 
 			// OPEN the most hot
 			int pos = foundMaxTemp();
-			digitalWrite(RelayPin[pos], OPEN_VALVE);
-			RelayStatus[pos] = true;
-			RelaySafeMode[pos] = true;
+			doVALVE(pos, OPEN_VALVE, true);
 		}
 		else {
 			if (isSafeMode()) {
 				//  already in safe mode 
-				//  check if there are other hot boiler
+				//  check if there are other HOT boiler
 				//  and OPEN it
-				int pos = foundMaxTemp();
-				digitalWrite(RelayPin[pos], OPEN_VALVE);
-				RelayStatus[pos] = true;
-				RelaySafeMode[pos] = true;
+				int pos = foundMaxTemp();				
 				for (int i = 0; i < NUMBOILER; i++) {
 					if (RelaySafeMode[i]) {
 						if (i != pos) {
-							digitalWrite(RelayPin[i], CLOSE_VALVE);
-							RelayStatus[i] = false;
-							RelaySafeMode[i] = false;
+							if ((unsigned int)(TempValue[i] - TempValue[pos]) > 3) {
+								doVALVE(pos, OPEN_VALVE, true);
+								doVALVE(i, CLOSE_VALVE, true);
+								i = NUMBOILER;	// exit
+							}
 						}
 					}
 				} 
@@ -263,8 +276,7 @@ void exitSafeMode(void) {
 	// set all Relay SafeMode  = false
 	for (int i = 0; i < NUMBOILER; i++) {
 		if (RelaySafeMode[i]) {	// check if a VALVE is in SafeMode
-			digitalWrite(RelayPin[i], CLOSE_VALVE);
-			RelayStatus[i] = false;
+			//doVALVE(i, CLOSE_VALVE, true);  // delete this line
 			RelaySafeMode[i] = false;
 		}
 	}
@@ -287,8 +299,8 @@ boolean isAllClose(void) {
 
 int foundMaxTemp(void) {
 	// found max sensor Temp
-	int maxTemp   = 0; // store max sensor temp
-	int maxNumber;     // store max sensor number
+	int maxTemp   = -127; // store max sensor temp
+	int maxNumber;        // store max sensor number
 	for (int i = 0; i < NUMBOILER; i++) {
 		if (TempValue[i] > maxTemp) {
 			maxNumber = i;
@@ -297,7 +309,7 @@ int foundMaxTemp(void) {
 	}
 	if (_DEBUG_) {
 		Serial.print("Max Temperature: ");
-		Serial.print(maxNumber);
+		Serial.println(maxNumber);
 	}
 	return maxNumber;
 }
@@ -333,6 +345,7 @@ void switchMode(boolean reverse) {
 	}
 	if (_DEBUG_) Serial.print("switchMode:");
 	if (_DEBUG_) Serial.println(ActiveMode);
+	if (_TXSERIAL_) txData.ActiveMode = ActiveMode;
 	checkChangeMode();
 }
 
@@ -454,9 +467,13 @@ void checkChangeMode(void) {
 	clearLCDbottom();
 	switch (ActiveMode) {
 		case MODE_ALL_OFF:
+			if (isSafeMode()) exitSafeMode();  // exit from SafeMode
+			writeWaitLCD();
 			closeAllVALVE();
 			break;
 		case MODE_ALL_ON:
+			if (isSafeMode()) exitSafeMode();  // exit from SafeMode
+			writeWaitLCD();
 			openAllVALVE();
 			break;
 		case MODE_AUTO: 
@@ -509,17 +526,17 @@ void writeSensTempLCD(void) {
 		if (RelayStatus[i])
 			lcd.write((uint8_t)1);  // ON Char
 		else {
-			lcd.print(" ");
+			lcd.print(" ");			// space for OFF char
 		}
 		if (TempValue[i] == -127) {
 			lcd.print("err ");
 		}
 		else {
 			if (TempValue[i] < 10) {
-				lcd.print(" ");
+				lcd.print(" ");			// add a space for one digit number
 			}
 			lcd.print(TempValue[i]);
-			lcd.write((uint8_t)0);    // degree char
+			lcd.write((uint8_t)0);		// degree char
 		}
 	}
 }
@@ -559,6 +576,14 @@ void writeModeLCD(void) {
 	else {
 		lcd.print("      ");
 	}
+}
+
+void writeWaitLCD(void) {
+	// write WAIT
+	lcd.setCursor(7,2);
+	lcd.print(" WAIT ");
+	lcd.setCursor(14,2);
+	lcd.print("      ");
 }
 
 void writeThersoldLCD(void) {
@@ -650,10 +675,12 @@ void initSensor(void) {
 
 //  Temperature Sensor Session
 void scanSensors(void) {
+	// scan temperature sensors every interval TimerTemperature
 	if((unsigned long)(currentMillis - LastReadTemperature) > TimerTemperature) {
 		sensors.requestTemperatures();    
 		for (int i = 0; i < NUMBOILER; i++) {
 			TempValue[i] = (int) sensors.getTempC(TempAddress[i]);
+			if (_TXSERIAL_) txData.TempValue[i] = TempValue[i];
 			if (_DEBUG_) Serial.print(LetterBoiler[i]);
 			if (_DEBUG_) Serial.print(": ");
 			if (_DEBUG_) Serial.print(TempValue[i]);
@@ -661,8 +688,8 @@ void scanSensors(void) {
 		}
 		if (_DEBUG_) Serial.println(" ");
 		LastReadTemperature = currentMillis;
+		tempControl();
 	}
-	tempControl();
 }
 
 // LCD Session
@@ -680,6 +707,7 @@ void clearLCDtop(void) {
 	lcd.print("                    ");
 }
 
+
 void clearLCDbottom(void) {
 	lcd.setCursor(0,2);
 	lcd.print("                    ");
@@ -691,15 +719,54 @@ void clearLCDbottom(void) {
 void closeAllVALVE(void) {
 	if (_DEBUG_) Serial.println("closeAllVALVE");
 	for (int i = 0; i < NUMBOILER; i++) {
-		digitalWrite(RelayPin[i], CLOSE_VALVE);
-		RelayStatus[i] = false;
+		doVALVE(i, CLOSE_VALVE, false);
+		writeSensTempLCD();
+		if (_TXSERIAL_) txData.RelayStatus[i] = RelayStatus[i];
+		delay(1000);
 	}
 }
 
 void openAllVALVE(void) {
 	if (_DEBUG_) Serial.println("openAllVALVE");
 	for (int i = 0; i < NUMBOILER; i++) {
-		digitalWrite(RelayPin[i], OPEN_VALVE);
-		RelayStatus[i] = true;
+		doVALVE(i, OPEN_VALVE, false);
+		writeSensTempLCD();
+		if (_TXSERIAL_) txData.RelayStatus[i] = RelayStatus[i];
+		delay(1000);
 	}
 }
+
+void doVALVE(int number, int action, bool safeMode) {
+	// prevent switching relay too rapidly limited from TimerSwitch
+	if ((unsigned long)(currentMillis - LastSwitch) > TimerSwitch)
+	{
+		// action to CLOSE or OPEN VALVE
+		digitalWrite(RelayPin[number], action);
+
+		if (action == OPEN_VALVE)
+		{
+			RelayStatus[number] = true;
+			if (safeMode) RelaySafeMode[number] = true;
+		}
+		else 
+		{
+			RelayStatus[number] = false;
+			if (safeMode) RelaySafeMode[number] = false;
+		}
+		if (_TXSERIAL_) txData.RelayStatus[number] = RelayStatus[number];
+		LastSwitch = currentMillis;
+	}
+}
+
+// Serial Data
+void sendSerialData(void) {
+	// send seral data every interval TimerSerialData
+	if ((unsigned long)(currentMillis - LastSendData) > TimerSerialData) {
+		//send the data id _DEBUG_ is disabled
+		if (!_DEBUG_) {
+			ET.sendData();
+		}
+		LastSendData = currentMillis;
+	}
+}	
+
