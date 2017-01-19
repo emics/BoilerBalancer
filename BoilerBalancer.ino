@@ -64,17 +64,18 @@ int SelectedItem                  = ITEM_MODE;           // 0 = ITEM_OFF     1 =
 int ActiveMode                    = MODE_AUTO;           // default MODE
 const char LetterBoiler[]         = {"ABCDEF"};
 const String ModeName[]           = {"ALL OFF","ALL ON"," AUTO"};
+const long DebounceDelay          = 50;                  // read button status with delay 50ms 
 const long TimerSave              = 30000;               // save data 30 seconds after last push button
 const long TimerStandby           = 60000;               // go in standby 1 minute after last push button
 const long TimerTemperature       = 1000;                // read temperature every 1 second
 const long TimerSerialData        = 10000;               // send data temperature on serial line every 10 seconds
 const long TimerSwitch            = 10000;               // switch one relay at least after 10 seconds from other relay switch
 unsigned long currentMillis       = 0;
-unsigned long LastButtonPress      = 0;                   // millis() returns an unsigned long.
-unsigned long LastReadTemperature = TimerTemperature + 1;
-unsigned long LastAction          = TimerStandby + 1;
+unsigned long LastDebounce        = 0;                   // timer to manage buttons debounce
+unsigned long LastReadTemperature = TimerTemperature + 1;// last time temperature is readed from sensors
+unsigned long LastAction          = TimerStandby + 1;    // last time button is pressed
 unsigned long LastSendData        = 0;
-unsigned long LastSwitch          = TimerSwitch + 1;     // init at high value for start switching immediatly after power on
+//unsigned long LastSwitch          = TimerSwitch + 1;     // init at high value for start switching immediatly after power on
 boolean Saved                     = false;
 boolean StandBy                   = true;
 
@@ -82,7 +83,6 @@ boolean StandBy                   = true;
 const int ButtonPin[]             = {10, 11, 12};        // push button is attached to this pin
 int ButtonState[]                 = {HIGH,HIGH,HIGH};
 boolean ButtonActive[]            = {false,false,false};
-const long debounceDelay          = 50;
 
 // relay                          
 boolean RelayStatus[]             = {false, false, false, false, false, false};
@@ -354,7 +354,7 @@ void checkButtons(void){
   ButtonState[BTNUP]  = digitalRead(ButtonPin[BTNUP]);
   ButtonState[BTNDWN] = digitalRead(ButtonPin[BTNDWN]);
 
-  if ((unsigned long)(currentMillis - LastButtonPress) > debounceDelay){
+  if ((unsigned long)(currentMillis - LastDebounce) > DebounceDelay){
     if (ButtonState[BTNSEL] == LOW){ 
       LastAction = currentMillis;
       if (!ButtonActive[BTNSEL]){
@@ -458,7 +458,7 @@ void checkButtons(void){
         ButtonActive[BTNDWN] = false;
       }
     }    
-    LastButtonPress = currentMillis;
+    LastDebounce = currentMillis;
   }
 }
 
@@ -765,6 +765,4 @@ void sendSerialData(void) {
     }
     LastSendData = currentMillis;
   }
-} 
-
-
+}
