@@ -159,7 +159,7 @@ void loop(void) {
   scanSensors();
   refreshLCD();
   saveData();
-  sendSerialData();
+  if (_TXSERIAL_) sendSerialData();
 }
 
 void tempControl(void) {
@@ -765,4 +765,6 @@ void sendSerialData(void) {
     }
     LastSendData = currentMillis;
   }
-}
+} 
+
+
