@@ -60,8 +60,6 @@ DeviceAddress TempAddress[]       = {
 #define TEMPERATURE_PRECISION     9
 
 // system                         
-unsigned long currentMillis       = 0;
-unsigned long previousMillis      = 0;                   // millis() returns an unsigned long.
 int SelectedItem                  = ITEM_MODE;           // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITEM_MODE
 int ActiveMode                    = MODE_AUTO;           // default MODE
 const char LetterBoiler[]         = {"ABCDEF"};
@@ -71,6 +69,8 @@ const long TimerStandby           = 60000;               // go in standby 1 minu
 const long TimerTemperature       = 1000;                // read temperature every 1 second
 const long TimerSerialData        = 10000;               // send data temperature on serial line every 10 seconds
 const long TimerSwitch            = 10000;               // switch one relay at least after 10 seconds from other relay switch
+unsigned long currentMillis       = 0;
+unsigned long LastButtonPress      = 0;                   // millis() returns an unsigned long.
 unsigned long LastReadTemperature = TimerTemperature + 1;
 unsigned long LastAction          = TimerStandby + 1;
 unsigned long LastSendData        = 0;
@@ -354,7 +354,7 @@ void checkButtons(void){
   ButtonState[BTNUP]  = digitalRead(ButtonPin[BTNUP]);
   ButtonState[BTNDWN] = digitalRead(ButtonPin[BTNDWN]);
 
-  if ((unsigned long)(currentMillis - previousMillis) > debounceDelay){
+  if ((unsigned long)(currentMillis - LastButtonPress) > debounceDelay){
     if (ButtonState[BTNSEL] == LOW){ 
       LastAction = currentMillis;
       if (!ButtonActive[BTNSEL]){
@@ -458,7 +458,7 @@ void checkButtons(void){
         ButtonActive[BTNDWN] = false;
       }
     }    
-    previousMillis = currentMillis;
+    LastButtonPress = currentMillis;
   }
 }
 
