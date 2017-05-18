@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////
 //                                                  //
-//        Balance Boiler 1.05                       //
+//             Balance Boiler 1.07                  //
 //                                                  //
 //////////////////////////////////////////////////////
 
@@ -14,111 +14,112 @@
 
 
 // DEFINITIONS
-#define _DEBUG_                   true
-#define _TXSERIAL_                false
-#define VERSION                   1.05
-#define NUMBOILER                 6                      // number of boiler [min 2 max 6]
-#define ONE_WIRE_BUS              9                      // one wire pin DS18B20
-const int RelayPin[]              = {2, 3, 4, 5, 6, 7};  // relay attached to this pin {A, B, C, D, E, F}
-DeviceAddress TempAddress[]       = {
-  { 0x28, 0xFF, 0x31, 0xFA, 0x83, 0x16, 0x03, 0x49 },    // A
-  { 0x28, 0xFF, 0xD9, 0xF7, 0x83, 0x16, 0x03, 0x30 },    // B
-  { 0x28, 0xFF, 0xD6, 0x56, 0x63, 0x16, 0x03, 0xBE },    // C
-  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 },    // D  
-  { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 },    // E
-  { 0x28, 0xFF, 0x7E, 0xC9, 0x73, 0x16, 0x04, 0x01 }     // F
+#define _DEBUG_           true
+#define _TXSERIAL_        false
+#define VERSION           1.07
+#define NUMBOILER         6 // number of boiler [min 2 max 6]
+#define ONE_WIRE_BUS      9 // one wire pin DS18B20
+const int RelayPin[]      = {2, 3, 4, 5, 6, 7};  // relay attached to this pin {A, B, C, D, E, F}
+DeviceAddress TempAddress[]= {
+  { 0x28, 0xFF, 0x24, 0x3C, 0x84, 0x16, 0x04, 0x2E }, // A
+  { 0x28, 0xFF, 0x38, 0xD3, 0x84, 0x16, 0x05, 0xFE }, // B
+  { 0x28, 0xFF, 0x92, 0x27, 0x85, 0x16, 0x05, 0xA4 }, // C
+  { 0x28, 0xFF, 0x2B, 0x81, 0x63, 0x16, 0x03, 0x73 }, // D  
+  { 0x28, 0xFF, 0x4F, 0x7C, 0x63, 0x16, 0x03, 0x91 }, // E
+  { 0x28, 0xFF, 0x7E, 0xC9, 0x73, 0x16, 0x04, 0x01 }  // F
 };
 
 //////////////////////////////////////////////////////
 /////////////// END configuration Part ///////////////
 //////////////////////////////////////////////////////
 
-#define MODE_ALL_OFF              0                      // Mode all relay OFF
-#define MODE_ALL_ON               1                      // Mode all relay ON
-#define MODE_AUTO                 2                      // Mode Automatic
-#define ITEM_OFF                  0                      // Menu Item OFF
-#define ITEM_ON                   1                      // Menu Item ON
-#define ITEM_MODE                 2                      // Menu Item Mode
-#define OPEN_VALVE                HIGH                   // relay OFF valve OPEN
-#define CLOSE_VALVE               LOW                    // relay ON valve CLOSE
+#define MODE_ALL_OFF          0  // Mode all relay OFF
+#define MODE_ALL_ON           1  // Mode all relay ON
+#define MODE_AUTO             2  // Mode Automatic
+#define ITEM_OFF              0  // Menu Item OFF
+#define ITEM_ON               1  // Menu Item ON
+#define ITEM_MODE             2  // Menu Item Mode
+#define OPEN_VALVE         HIGH  // relay OFF valve OPEN
+#define CLOSE_VALVE         LOW  // relay ON valve CLOSE
+                            
+// EEPROM                   
+#define DEFAULTON            60  // default centigrade temp for on relay
+#define DEFAULTOFF           40  // default centigrade temp for off relay
+#define EEMAGICADDR           0  // eeprom address of magic byte
+#define EEMAGICVALUE         78  // eeprom value of magic byte
+#define EETEMP_OFF_ADDR       2  // eeprom address of OFF temperaure
+#define EETEMP_ON_ADDR        3  // eeprom address of ON temperaure
+#define EEMODE_ADDR           4  // eeprom MODE address (save current active MODE)
+                            
+// BUTTON                   
+#define BTNUP                 0
+#define BTNDWN                1
+#define BTNSEL                2
 
-// EEPROM                         
-#define DEFAULTON                 60                     // default centigrade temp for on relay
-#define DEFAULTOFF                40                     // default centigrade temp for off relay
-#define EEMAGICADDR               0                      // eeprom address of magic byte
-#define EEMAGICVALUE              78                     // eeprom value of magic byte
-#define EETEMP_OFF_ADDR           2                      // eeprom address of OFF temperaure
-#define EETEMP_ON_ADDR            3                      // eeprom address of ON temperaure
-#define EEMODE_ADDR               4                      // eeprom MODE address (save current active MODE)
+//DS18B20 
+#define TEMPERATURE_PRECISION 9
 
-// BUTTON                         
-#define BTNUP                     0
-#define BTNDWN                    1
-#define BTNSEL                    2
+// system
+unsigned long currentMillis   = 0;
+unsigned long previousMillis  = 0; // millis() returns an unsigned long.
+int SelectedItem              = ITEM_MODE;      // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITEM_MODE
+int ActiveMode                = MODE_AUTO;      // default MODE
+const char LetterBoiler[]     = {"ABCDEF"};
+const String ModeName[]       = {"ALL OFF","ALL ON"," AUTO"};
+const long TimerSave          = 30000; // save data 30 seconds after last push button
+const long TimerStandby       = 60000; // go in standby 1 minute after last push button
+const long TimerTemperature   = 1000;  // read temperature every 1 second
+const long TimerSerialData    = 10000; // send data temperature on serial line every 10 seconds
+const long TimerSwitch        = 10000; // switch one relay at least after 10 seconds from other relay switch
+unsigned long LastReadTemperature= TimerTemperature + 1;
+unsigned long LastAction      = TimerStandby + 1;
+unsigned long LastSendData    = 0;
+unsigned long LastSwitch      = TimerSwitch + 1; // init at high value for start switching immediatly after power on
+boolean Saved                 = false;
+boolean StandBy               = true;
 
-//DS18B20                         
-#define TEMPERATURE_PRECISION     9
+//  buttons
+const int ButtonPin[]         = {10, 11, 12};   // push button is attached to this pin
+int ButtonState[]             = {HIGH,HIGH,HIGH};
+boolean ButtonActive[]        = {false,false,false};
+const long debounceDelay      = 50;
 
-// system                         
-int SelectedItem                  = ITEM_MODE;           // 0 = ITEM_OFF     1 = ITEM_ON    2 = ITEM_MODE
-int ActiveMode                    = MODE_AUTO;           // default MODE
-const char LetterBoiler[]         = {"ABCDEF"};
-const String ModeName[]           = {"ALL OFF","ALL ON"," AUTO"};
-const long DebounceDelay          = 50;                  // read button status with delay 50ms 
-const long TimerSave              = 30000;               // save data 30 seconds after last push button
-const long TimerStandby           = 60000;               // go in standby 1 minute after last push button
-const long TimerTemperature       = 1000;                // read temperature every 1 second
-const long TimerSerialData        = 10000;               // send data temperature on serial line every 10 seconds
-const long TimerSwitch            = 10000;               // switch one relay at least after 10 seconds from other relay switch
-unsigned long currentMillis       = 0;
-unsigned long LastDebounce        = 0;                   // timer to manage buttons debounce
-unsigned long LastReadTemperature = TimerTemperature + 1;// last time temperature is readed from sensors
-unsigned long LastAction          = TimerStandby + 1;    // last time button is pressed
-unsigned long LastSendData        = 0;
-//unsigned long LastSwitch          = TimerSwitch + 1;     // init at high value for start switching immediatly after power on
-boolean Saved                     = false;
-boolean StandBy                   = true;
+// relay
+boolean RelayStatus[]         = {false, false, false, false, false, false};
+boolean RelaySafeMode[]       = {false, false, false, false, false, false};
 
-//  buttons                       
-const int ButtonPin[]             = {10, 11, 12};        // push button is attached to this pin
-int ButtonState[]                 = {HIGH,HIGH,HIGH};
-boolean ButtonActive[]            = {false,false,false};
+// temperature
+int OnTemp                    = DEFAULTON;
+int OffTemp                   = DEFAULTOFF;
+int TempValue[]               = {0,0,0,0,0,0};
 
-// relay                          
-boolean RelayStatus[]             = {false, false, false, false, false, false};
-boolean RelaySafeMode[]           = {false, false, false, false, false, false};
-
-// temperature                    
-int OnTemp                        = DEFAULTON;
-int OffTemp                       = DEFAULTOFF;
-int TempValue[]                   = {0,0,0,0,0,0};
-
-// LCD                            
-#define I2C_ADDR                  0x20
-#define BACKLIGHT_PIN             7
-#define En_pin                    4
-#define Rw_pin                    5
-#define Rs_pin                    6
-#define D4_pin                    0
-#define D5_pin                    1
-#define D6_pin                    2
-#define D7_pin                    3
-const int startPositionLCD[][2]   = {{0 ,0}, {7 ,0}, {14,0}, {0 ,1}, {7 ,1}, {14,1}};  // column and row position of each temp value on LCD 
+// LCD
+#define I2C_ADDR           0x20
+#define BACKLIGHT_PIN         7
+#define En_pin                4
+#define Rw_pin                5
+#define Rs_pin                6
+#define D4_pin                0
+#define D5_pin                1
+#define D6_pin                2
+#define D7_pin                3
+const int startPositionLCD[][2] = {{0 ,0}, {7 ,0}, {14,0}, {0 ,1}, {7 ,1}, {14,1}};  // column and row position of each temp value on LCD 
 
 // custom char
-byte customDeg[8]                 = {B01000, B10100, B01000, B00011, B00100, B00100, B00011, B00000};
-byte customON[8]                  = {B00000, B00000, B01100, B11110, B11110, B01100, B00000, B00000};
-byte customUpArrow[8]             = {B00100, B01110, B10101, B00100, B00100, B00100, B00000, B00000};
+byte customDeg[8]             = {B01000, B10100, B01000, B00011, B00100, B00100, B00011, B00000};
+byte customON[8]              = {B00000, B00000, B01100, B11110, B11110, B01100, B00000, B00000};
+byte customUpArrow[8]         = {B00100, B01110, B10101, B00100, B00100, B00100, B00000, B00000};
 
 
 // DECLARATION
 // DS18B20 library
-OneWire                           oneWire(ONE_WIRE_BUS);
-DallasTemperature                 sensors(&oneWire);
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
 // LCD Library
-LiquidCrystal_I2C                 lcd(I2C_ADDR,En_pin,Rw_pin,Rs_pin,D4_pin,D5_pin,D6_pin,D7_pin); 
+LiquidCrystal_I2C  lcd(I2C_ADDR,En_pin,Rw_pin,Rs_pin,D4_pin,D5_pin,D6_pin,D7_pin); 
+//LiquidCrystal_I2C lcd(0x3F, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 // EasyTransfer object
-EasyTransfer                      ET;
+EasyTransfer ET;
 
 struct SEND_DATA_STRUCTURE{
   int TempValue[];
@@ -159,7 +160,7 @@ void loop(void) {
   scanSensors();
   refreshLCD();
   saveData();
-  if (_TXSERIAL_) sendSerialData();
+  sendSerialData();
 }
 
 void tempControl(void) {
@@ -168,7 +169,7 @@ void tempControl(void) {
       // check if some sensor are in error
       if (TempValue[i] == -127) {
         // sensor in error -  OPEN VALVE
-        // doVALVE(i, OPEN_VALVE, false);
+        //doVALVE(i, OPEN_VALVE, false);
       }
       else { 
         if (RelayStatus[i]) {
@@ -190,13 +191,23 @@ void tempControl(void) {
         }
         else {
           // Relay already OFF valve CLOSE
-          if (TempValue[i] >= OnTemp) {
-            // OPEN valve - the temperature is HOT
-            if (_DEBUG_) Serial.print("OPEN valve: ");
-            if (_DEBUG_) Serial.println(LetterBoiler[i]);
-            doVALVE(i, OPEN_VALVE, false);
-            if (isSafeMode()) exitSafeMode();  // exit from SafeMode
-          }
+		  if (!isSafeMode()) {
+			// not in SAFE MODE
+            if (TempValue[i] >= OnTemp) {
+              // OPEN valve - the temperature is HOT
+              if (_DEBUG_) Serial.print("OPEN valve: ");
+              if (_DEBUG_) Serial.println(LetterBoiler[i]);
+              doVALVE(i, OPEN_VALVE, false);
+              if (isSafeMode()) exitSafeMode();  // exit from SafeMode
+            }
+		  }
+		  else {
+			// in SAFE MODE
+			// Exit Safe Mode from Relay already OFF 
+            // and Temperature is mucher than midTemp
+			int midTemp = (OnTemp + OffTemp) / 2;
+			if (TempValue[i] >= midTemp) exitSafeMode();  
+		  }
         }
       }
     }
@@ -354,7 +365,7 @@ void checkButtons(void){
   ButtonState[BTNUP]  = digitalRead(ButtonPin[BTNUP]);
   ButtonState[BTNDWN] = digitalRead(ButtonPin[BTNDWN]);
 
-  if ((unsigned long)(currentMillis - LastDebounce) > DebounceDelay){
+  if ((unsigned long)(currentMillis - previousMillis) > debounceDelay){
     if (ButtonState[BTNSEL] == LOW){ 
       LastAction = currentMillis;
       if (!ButtonActive[BTNSEL]){
@@ -362,6 +373,7 @@ void checkButtons(void){
         ButtonActive[BTNSEL] = true;
         if (StandBy){
           StandBy = false;
+		  lcd.backlight();
         }
         else{
           if (ActiveMode == MODE_AUTO){
@@ -398,6 +410,7 @@ void checkButtons(void){
         ButtonActive[BTNUP] = true;
         if (StandBy){
         StandBy = false;
+		lcd.backlight();
         }
         else{
           Saved = false;
@@ -432,6 +445,7 @@ void checkButtons(void){
         ButtonActive[BTNDWN] = true;
         if (StandBy){
         StandBy = false;
+		lcd.backlight();
         }
         else{
           Saved = false;
@@ -458,7 +472,7 @@ void checkButtons(void){
         ButtonActive[BTNDWN] = false;
       }
     }    
-    LastDebounce = currentMillis;
+    previousMillis = currentMillis;
   }
 }
 
@@ -604,7 +618,7 @@ void writeThersoldLCD(void) {
 void initLCD(void) {
   if (_DEBUG_) Serial.println("initLCD");
   lcd.begin(20,4);
-  //lcd.backlight();
+  lcd.backlight();
   lcd.createChar(0, customDeg);
   lcd.createChar(1, customON);
   lcd.createChar(2, customUpArrow);  
@@ -698,6 +712,7 @@ void screenSaver() {
   writeSensTempLCD();
   lcd.setCursor(0,3);
   lcd.print("                    ");
+  lcd.noBacklight();
 }
 
 void clearLCDtop(void) {
@@ -706,6 +721,7 @@ void clearLCDtop(void) {
   lcd.setCursor(0,1);
   lcd.print("                    ");
 }
+
 
 void clearLCDbottom(void) {
   lcd.setCursor(0,2);
@@ -720,6 +736,7 @@ void closeAllVALVE(void) {
   for (int i = 0; i < NUMBOILER; i++) {
     doVALVE(i, CLOSE_VALVE, false);
     writeSensTempLCD();
+    if (_TXSERIAL_) txData.RelayStatus[i] = RelayStatus[i];
     //delay(1000);
   }
 }
@@ -729,6 +746,7 @@ void openAllVALVE(void) {
   for (int i = 0; i < NUMBOILER; i++) {
     doVALVE(i, OPEN_VALVE, false);
     writeSensTempLCD();
+    if (_TXSERIAL_) txData.RelayStatus[i] = RelayStatus[i];
     //delay(1000);
   }
 }
@@ -766,5 +784,4 @@ void sendSerialData(void) {
     LastSendData = currentMillis;
   }
 } 
-
 
